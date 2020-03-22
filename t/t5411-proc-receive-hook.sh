@@ -691,9 +691,9 @@ test_expect_success "setup proc-receive hook" '
 	printf >&2 "# proc-receive hook\n"
 
 	test-tool proc-receive -v \
-		-r "$ZERO_OID $A refs/for/next/topic ok" \
+		-r "$ZERO_OID $A refs/for/next/topic ok ref:refs/pull/123/head" \
 		-r "$ZERO_OID $A refs/review/a/b/c/topic ok" \
-		-r "$ZERO_OID $A refs/for/master/topic ok"
+		-r "$ZERO_OID $A refs/for/master/topic ok ref:refs/pull/124/head"
 	EOF
 	chmod a+x upstream/hooks/proc-receive
 '
@@ -716,17 +716,17 @@ test_expect_success "report update of all special refs" '
 	remote: proc-receive< <ZERO-OID> <COMMIT-A> refs/for/next/topic
 	remote: proc-receive< <ZERO-OID> <COMMIT-A> refs/review/a/b/c/topic
 	remote: proc-receive< <ZERO-OID> <COMMIT-A> refs/for/master/topic
-	remote: proc-receive> <ZERO-OID> <COMMIT-A> refs/for/next/topic ok
+	remote: proc-receive> <ZERO-OID> <COMMIT-A> refs/for/next/topic ok ref:refs/pull/123/head
 	remote: proc-receive> <ZERO-OID> <COMMIT-A> refs/review/a/b/c/topic ok
-	remote: proc-receive> <ZERO-OID> <COMMIT-A> refs/for/master/topic ok
+	remote: proc-receive> <ZERO-OID> <COMMIT-A> refs/for/master/topic ok ref:refs/pull/124/head
 	remote: # post-receive hook
 	remote: post-receive< <ZERO-OID> <COMMIT-A> refs/for/next/topic
 	remote: post-receive< <ZERO-OID> <COMMIT-A> refs/review/a/b/c/topic
 	remote: post-receive< <ZERO-OID> <COMMIT-A> refs/for/master/topic
 	To ../upstream
-	 * [new reference]   HEAD -> refs/for/next/topic
+	 * [new reference]   HEAD -> refs/pull/123/head
 	 * [new reference]   HEAD -> refs/review/a/b/c/topic
-	 * [new reference]   HEAD -> refs/for/master/topic
+	 * [new reference]   HEAD -> refs/pull/124/head
 	EOF
 	test_cmp expect actual &&
 	(
@@ -869,6 +869,84 @@ test_expect_success "report mixed refs update (special ref first)" '
 	<COMMIT-A> refs/heads/master
 	<COMMIT-A> refs/heads/yyy
 	<COMMIT-B> refs/heads/zzz
+	EOF
+	test_cmp expect actual
+'
+
+test_expect_success "config receive.procReceiveRefs for all ref/" '
+	(
+		cd upstream &&
+		git config --add receive.procReceiveRefs refs/
+	)
+'
+
+test_expect_success "setup proc-receive hook" '
+	cat >upstream/hooks/proc-receive <<-EOF &&
+	#!/bin/sh
+
+	printf >&2 "# proc-receive hook\n"
+
+	test-tool proc-receive -v \
+		-r "$A $ZERO_OID refs/heads/yyy ft" \
+		-r "$B $A refs/heads/zzz ft" \
+		-r "$A $B refs/for/master/topic ok ref:refs/pull/123/head" \
+		-r "$A $B refs/heads/master ft" \
+		-r "$B $A refs/for/next/topic ok ref:refs/pull/124/head"
+	EOF
+	chmod a+x upstream/hooks/proc-receive
+'
+
+test_expect_success "report test: fallthrough" '
+	(
+		cd workbench &&
+		git push -f origin \
+			:refs/heads/yyy \
+			$A:refs/heads/zzz \
+			HEAD:refs/for/master/topic \
+			HEAD:refs/for/next/topic \
+			$B:refs/heads/master
+	) >out 2>&1 &&
+	format_git_output <out >actual &&
+	cat >expect <<-EOF &&
+	remote: # pre-receive hook
+	remote: pre-receive< <COMMIT-A> <COMMIT-B> refs/heads/master
+	remote: pre-receive< <COMMIT-A> <ZERO-OID> refs/heads/yyy
+	remote: pre-receive< <COMMIT-B> <COMMIT-A> refs/heads/zzz
+	remote: pre-receive< <ZERO-OID> <COMMIT-A> refs/for/master/topic
+	remote: pre-receive< <ZERO-OID> <COMMIT-A> refs/for/next/topic
+	remote: # proc-receive hook
+	remote: proc-receive< <COMMIT-A> <COMMIT-B> refs/heads/master
+	remote: proc-receive< <COMMIT-A> <ZERO-OID> refs/heads/yyy
+	remote: proc-receive< <COMMIT-B> <COMMIT-A> refs/heads/zzz
+	remote: proc-receive< <ZERO-OID> <COMMIT-A> refs/for/master/topic
+	remote: proc-receive< <ZERO-OID> <COMMIT-A> refs/for/next/topic
+	remote: proc-receive> <COMMIT-A> <ZERO-OID> refs/heads/yyy ft
+	remote: proc-receive> <COMMIT-B> <COMMIT-A> refs/heads/zzz ft
+	remote: proc-receive> <COMMIT-A> <COMMIT-B> refs/for/master/topic ok ref:refs/pull/123/head
+	remote: proc-receive> <COMMIT-A> <COMMIT-B> refs/heads/master ft
+	remote: proc-receive> <COMMIT-B> <COMMIT-A> refs/for/next/topic ok ref:refs/pull/124/head
+	remote: # post-receive hook
+	remote: post-receive< <COMMIT-A> <ZERO-OID> refs/heads/yyy
+	remote: post-receive< <COMMIT-B> <COMMIT-A> refs/heads/zzz
+	remote: post-receive< <COMMIT-A> <COMMIT-B> refs/for/master/topic
+	remote: post-receive< <COMMIT-A> <COMMIT-B> refs/heads/master
+	remote: post-receive< <COMMIT-B> <COMMIT-A> refs/for/next/topic
+	To ../upstream
+	   1029397..ce858e6  <COMMIT-B> -> master
+	 - [deleted]         yyy
+	 + ce858e6...1029397 <COMMIT-A> -> zzz (forced update)
+	 * [new reference]   HEAD -> refs/pull/123/head
+	 * [new reference]   HEAD -> refs/pull/124/head
+	EOF
+	test_cmp expect actual &&
+	(
+		cd upstream &&
+		git show-ref
+	) >out &&
+	format_git_output <out >actual &&
+	cat >expect <<-EOF &&
+	<COMMIT-B> refs/heads/master
+	<COMMIT-A> refs/heads/zzz
 	EOF
 	test_cmp expect actual
 '
